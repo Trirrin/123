@@ -1,4 +1,14 @@
 {
+  "imap": {
+    "host": "mail.tribios.top",
+    "port": 143,
+    "username": "xr@tribios.top",
+    "password": "Password123",
+    "use_ssl": false,
+    "starttls": true,
+    "verify_cert": false
+  },
+  "email_domain": "tribios.top",
   "backend_url": "http://localhost:8000",
   "admin_password": "your_admin_password"
 }

@@ -20,6 +20,7 @@ from pathlib import Path
 
 import requests
 from faker import Faker
+from imapclient import IMAPClient
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 from playwright_stealth import Stealth
 
@@ -28,7 +29,6 @@ CONFIG_FILE = Path(__file__).parent / "config.json"
 KIRO_DB_PATH = Path.home() / ".local" / "share" / "kiro-cli" / "data.sqlite3"
 DEVICE_AUTH_URL = "https://view.awsapps.com/start/#/device"
 BUILDER_ID_URL = "https://profile.aws.amazon.com/"
-ONESEC_MAIL_API = "https://www.1secmail.com/api/v1/"
 
 
 def retry_on_failure(max_attempts: int = 3, delay: float = 2.0, backoff: float = 2.0):
@@ -307,137 +307,149 @@ def load_config():
     return json.loads(CONFIG_FILE.read_text())
 
 
-class OneSecMailClient:
-    """Client for 1secmail.com temporary email service (no auth required)."""
-
-    def __init__(self):
-        self.base_url = ONESEC_MAIL_API
-        self.email_address = None
-        self.username = None
-        self.domain = None
-
-    def get_available_domains(self) -> list:
-        """Get list of available email domains."""
-        resp = requests.get(f"{self.base_url}?action=getDomainList")
-        resp.raise_for_status()
-        return resp.json()
-
-    def generate_random_email(self) -> str:
-        """Generate a random email address."""
-        domains = self.get_available_domains()
-        if not domains:
-            raise RuntimeError("No available domains from 1secmail")
-
-        # Generate random username (8-12 chars)
-        username_length = random.randint(8, 12)
-        username = ''.join(random.choices(string.ascii_lowercase + string.digits, k=username_length))
-
-        domain = random.choice(domains)
-        email = f"{username}@{domain}"
-
-        self.email_address = email
-        self.username = username
-        self.domain = domain
-
-        print(f"Generated temporary email: {email}")
-        return email
-
-    def get_messages(self) -> list:
-        """Get all messages in inbox."""
-        if not self.username or not self.domain:
-            raise RuntimeError("Email not initialized")
-
-        resp = requests.get(
-            f"{self.base_url}?action=getMessages&login={self.username}&domain={self.domain}"
-        )
-        resp.raise_for_status()
-        return resp.json()
-
-    def get_message(self, message_id: int) -> dict:
-        """Get full message details."""
-        if not self.username or not self.domain:
-            raise RuntimeError("Email not initialized")
-
-        resp = requests.get(
-            f"{self.base_url}?action=readMessage&login={self.username}&domain={self.domain}&id={message_id}"
-        )
-        resp.raise_for_status()
-        return resp.json()
-
-    def wait_for_verification_code(self, timeout: int = 120) -> str:
-        """Wait for AWS verification email and extract code."""
-        print(f"Waiting for verification email to {self.email_address}...")
-        start_time = time.time()
-
-        while time.time() - start_time < timeout:
-            try:
-                messages = self.get_messages()
-
-                # Look for AWS verification email
-                for msg in messages:
-                    subject = msg.get("subject", "").lower()
-                    from_addr = msg.get("from", "").lower()
-
-                    # Check if it's from AWS
-                    if "aws" in from_addr or "amazon" in from_addr or "signin.aws" in from_addr:
-                        # Get full message content
-                        full_msg = self.get_message(msg["id"])
-                        body = full_msg.get("textBody", "") or full_msg.get("htmlBody", "")
-
-                        # Extract 6-digit verification code
-                        # Pattern 1: "Verification code: 123456"
-                        match = re.search(r"[Vv]erification\s+code:+\s*(\d{6})", body)
-                        if not match:
-                            # Pattern 2: Standalone 6-digit code
-                            match = re.search(r"^\s*(\d{6})\s*$", body, re.MULTILINE)
-                        if not match:
-                            # Pattern 3: Code in HTML
-                            match = re.search(r">(\d{6})<", body)
-
-                        if match:
-                            code = match.group(1)
-                            print(f"Found verification code: {code}")
-                            return code
-
-            except Exception as e:
-                print(f"Error checking messages: {e}")
-
-            elapsed = int(time.time() - start_time)
-            print(f"Waiting for verification email... ({elapsed}s / {timeout}s)")
-            time.sleep(5)
-
-        raise TimeoutError(f"No verification code received within {timeout} seconds")
-
-
-def generate_identity() -> dict:
-    """Generate a random identity with realistic name and email using 1secmail."""
+def generate_identity(email_domain: str) -> dict:
+    """Generate a random identity with realistic name and human-like email."""
     fake = Faker("en_US")
     first_name = fake.first_name()
     last_name = fake.last_name()
     full_name = f"{first_name} {last_name}"
 
-    # Create 1secmail client and generate random email
-    mail_client = OneSecMailClient()
-    email = mail_client.generate_random_email()
+    # Generate human-like email with multiple realistic patterns.
+    first_lower = first_name.lower()
+    last_lower = last_name.lower()
+    first_initial = first_lower[0]
 
-    # Generate password for AWS Builder ID (meeting AWS requirements)
-    aws_password = (
+    # Choose email pattern randomly with weighted probabilities.
+    pattern = random.choices(
+        ["classic", "year", "initial_last", "last_initial", "short_number", "middle_initial"],
+        weights=[40, 20, 15, 10, 10, 5],
+        k=1
+    )[0]
+
+    if pattern == "classic":
+        # Classic full name: john.smith, johnsmith, john_smith
+        separator = random.choice([".", "_", ""])
+        email = f"{first_lower}{separator}{last_lower}@{email_domain}"
+
+    elif pattern == "year":
+        # Name + birth year: john1995, john.1992
+        year = random.randint(1985, 2002)  # Realistic age range
+        separator = random.choice(["", "."])
+        email = f"{first_lower}{separator}{year}@{email_domain}"
+
+    elif pattern == "initial_last":
+        # First initial + last name: jsmith, j.smith
+        separator = random.choice(["", "."])
+        email = f"{first_initial}{separator}{last_lower}@{email_domain}"
+
+    elif pattern == "last_initial":
+        # Last name + first initial: smithj, smith.j
+        separator = random.choice(["", "."])
+        email = f"{last_lower}{separator}{first_initial}@{email_domain}"
+
+    elif pattern == "short_number":
+        # Full name + short number (lucky number style): johnsmith23, john.smith7
+        separator = random.choice(["", ".", "_"])
+        number = random.randint(1, 99)  # Short, looks like lucky number
+        email = f"{first_lower}{separator}{last_lower}{number}@{email_domain}"
+
+    else:  # middle_initial
+        # Fake middle initial: john.m.smith, johnmsmith
+        middle_initial = random.choice(string.ascii_lowercase)
+        separator = random.choice([".", ""])
+        if separator:
+            email = f"{first_lower}{separator}{middle_initial}{separator}{last_lower}@{email_domain}"
+        else:
+            email = f"{first_lower}{middle_initial}{last_lower}@{email_domain}"
+
+    # Generate password meeting AWS requirements:
+    # - At least 8 characters
+    # - Uppercase, lowercase, number, special char
+    password = (
         secrets.choice(string.ascii_uppercase)
         + secrets.choice(string.ascii_lowercase)
         + secrets.choice(string.digits)
         + secrets.choice("!@#$%^&*")
         + "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
     )
-    aws_password = "".join(random.sample(aws_password, len(aws_password)))
+    # Shuffle to avoid predictable pattern.
+    password = "".join(random.sample(password, len(password)))
 
     return {
         "first_name": first_name,
         "last_name": last_name,
         "full_name": full_name,
         "email": email,
-        "password": aws_password,
-        "mail_client": mail_client,
+        "password": password,
     }
+
+
+def fetch_verification_code(config: dict, target_email: str, timeout: int = 120) -> str:
+    """Fetch AWS verification code from IMAP server.
+
+    Searches for emails sent TO the target email address.
+    """
+    import ssl as ssl_module
+
+    imap_cfg = config["imap"]
+    print(f"Connecting to IMAP server {imap_cfg['host']}...")
+
+    # Build SSL context if needed.
+    ssl_context = None
+    if imap_cfg.get("starttls") or imap_cfg.get("use_ssl"):
+        ssl_context = ssl_module.create_default_context()
+        if not imap_cfg.get("verify_cert", True):
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl_module.CERT_NONE
+
+    # Connect to IMAP.
+    if imap_cfg.get("use_ssl"):
+        client = IMAPClient(imap_cfg["host"], port=imap_cfg["port"], ssl_context=ssl_context)
+    else:
+        client = IMAPClient(imap_cfg["host"], port=imap_cfg["port"], ssl=False)
+        if imap_cfg.get("starttls"):
+            client.starttls(ssl_context=ssl_context)
+
+    with client:
+        client.login(imap_cfg["username"], imap_cfg["password"])
+        client.select_folder("INBOX")
+
+        start_time = time.time()
+        print(f"Waiting for verification email to {target_email}...")
+
+        while time.time() - start_time < timeout:
+            # Refresh mailbox.
+            client.noop()
+
+            # Search for emails TO target address from AWS.
+            messages = client.search(["TO", target_email, "FROM", "no-reply@signin.aws"])
+            if not messages:
+                # Fallback: try broader AWS sender search.
+                messages = client.search(["TO", target_email, "FROM", "aws"])
+
+            if messages:
+                # Check newest message first.
+                for msg_id in sorted(messages, reverse=True):
+                    data = client.fetch([msg_id], ["BODY[]"])
+                    body = data[msg_id][b"BODY[]"].decode("utf-8", errors="ignore")
+
+                    # Extract 6-digit verification code.
+                    # Pattern 1: "Verification code: 123456"
+                    match = re.search(r"[Vv]erification\s+code:+\s*(\d{6})", body)
+                    if not match:
+                        # Pattern 2: Standalone 6-digit code on its own line.
+                        match = re.search(r"^\s*(\d{6})\s*$", body, re.MULTILINE)
+
+                    if match:
+                        code = match.group(1)
+                        print(f"Found verification code: {code}")
+                        return code
+
+            elapsed = int(time.time() - start_time)
+            print(f"Waiting for verification email... ({elapsed}s / {timeout}s)")
+            time.sleep(5)
+
+    raise TimeoutError(f"No verification code received within {timeout} seconds")
 
 
 def safe_page_load(page, url: str, max_attempts: int = 3) -> bool:
@@ -483,7 +495,7 @@ def safe_wait_for_element(page, locator_str: str, timeout: int = 10000, max_atte
 
 
 @retry_on_failure(max_attempts=3, delay=2.0)
-def register_builder_id(page, identity: dict) -> bool:
+def register_builder_id(page, identity: dict, config: dict) -> bool:
     """Register AWS Builder ID using Playwright with human-like behavior."""
     print(f"\n=== Registering AWS Builder ID ===")
     print(f"Name: {identity['full_name']}")
@@ -533,7 +545,7 @@ def register_builder_id(page, identity: dict) -> bool:
 
         # Wait for and fetch verification code.
         print("Waiting for verification email...")
-        code = identity["mail_client"].wait_for_verification_code()
+        code = fetch_verification_code(config, identity["email"])
 
         # Fill verification code.
         code_input = safe_wait_for_element(
@@ -872,15 +884,14 @@ def register_single_account(account_num: int, config: dict, headless: bool) -> d
     print(f"{'='*60}")
 
     # Generate identity.
-    identity = generate_identity()
+    identity = generate_identity(config["email_domain"])
     print(f"[Account {account_num}] Generated identity:")
     print(f"[Account {account_num}]   Name: {identity['full_name']}")
     print(f"[Account {account_num}]   Email: {identity['email']}")
 
-    # Save identity for reference (exclude mail_client object).
+    # Save identity for reference.
     identity_file = Path(__file__).parent / f"identity_account_{account_num}.json"
-    identity_data = {k: v for k, v in identity.items() if k != "mail_client"}
-    identity_file.write_text(json.dumps(identity_data, indent=2))
+    identity_file.write_text(json.dumps(identity, indent=2))
 
     # Generate random fingerprint for this account.
     fingerprint = generate_random_fingerprint()
@@ -929,7 +940,7 @@ def register_single_account(account_num: int, config: dict, headless: bool) -> d
         try:
             # Step 1: Register Builder ID (with retry).
             try:
-                if not register_builder_id(page, identity):
+                if not register_builder_id(page, identity, config):
                     return {
                         "success": False,
                         "identity": identity,
@@ -1054,7 +1065,7 @@ def main():
     # Load config.
     config = load_config()
     print(f"Backend URL: {config['backend_url']}")
-    print(f"Using 1secmail.com temporary email service")
+    print(f"Email domain: {config['email_domain']}")
 
     results = []
     for i in range(1, args.count + 1):

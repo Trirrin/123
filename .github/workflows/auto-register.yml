@@ -75,6 +75,16 @@ jobs:
         run: |
           cat > config.json << 'EOF'
           {
+            "imap": {
+              "host": "${{ secrets.IMAP_HOST }}",
+              "port": ${{ secrets.IMAP_PORT }},
+              "username": "${{ secrets.IMAP_USERNAME }}",
+              "password": "${{ secrets.IMAP_PASSWORD }}",
+              "use_ssl": false,
+              "starttls": true,
+              "verify_cert": false
+            },
+            "email_domain": "${{ secrets.EMAIL_DOMAIN }}",
             "backend_url": "${{ secrets.BACKEND_URL }}",
             "admin_password": "${{ secrets.ADMIN_PASSWORD }}"
           }
