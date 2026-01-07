@@ -329,6 +329,16 @@ class MailTMClient:
         """Create a new temporary email account."""
         payload = {"address": address, "password": password}
         resp = self.session.post(f"{self.base_url}/accounts", json=payload)
+
+        if resp.status_code == 422:
+            # Email already exists or invalid, try with random suffix
+            print(f"Email {address} failed (422), trying with random suffix...")
+            username, domain = address.split("@")
+            random_suffix = secrets.token_hex(4)
+            address = f"{username}{random_suffix}@{domain}"
+            payload = {"address": address, "password": password}
+            resp = self.session.post(f"{self.base_url}/accounts", json=payload)
+
         resp.raise_for_status()
         account_data = resp.json()
         self.account_id = account_data["id"]
