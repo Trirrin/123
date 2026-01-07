@@ -348,14 +348,30 @@ class MailTMClient:
         return account_data
 
     def get_token(self) -> str:
-        """Get authentication token."""
-        payload = {"address": self.email_address, "password": self.password}
-        resp = self.session.post(f"{self.base_url}/token", json=payload)
-        resp.raise_for_status()
-        token_data = resp.json()
-        self.token = token_data["token"]
-        self.session.headers.update({"Authorization": f"Bearer {self.token}"})
-        return self.token
+        """Get authentication token with retry."""
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                payload = {"address": self.email_address, "password": self.password}
+                resp = self.session.post(f"{self.base_url}/token", json=payload)
+
+                if resp.status_code == 401 and attempt < max_attempts:
+                    print(f"Token request failed (401), retrying in 2s... (attempt {attempt}/{max_attempts})")
+                    time.sleep(2)
+                    continue
+
+                resp.raise_for_status()
+                token_data = resp.json()
+                self.token = token_data["token"]
+                self.session.headers.update({"Authorization": f"Bearer {self.token}"})
+                return self.token
+            except Exception as e:
+                if attempt == max_attempts:
+                    raise
+                print(f"Token request error: {e}, retrying...")
+                time.sleep(2)
+
+        raise RuntimeError("Failed to get token after retries")
 
     def get_messages(self) -> list:
         """Get all messages in inbox."""
@@ -491,6 +507,11 @@ def generate_identity() -> dict:
 
     # Create mail.tm account
     mail_client.create_account(email, mail_password)
+
+    # Wait a bit for account to be fully created
+    time.sleep(1)
+
+    # Get authentication token
     mail_client.get_token()
 
     # Generate password for AWS Builder ID (meeting AWS requirements)
