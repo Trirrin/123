@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  kiro-register:
+    build: .
+    image: kiro-auto-register:latest
+    container_name: kiro-register
+    shm_size: '2gb'  # Increase shared memory for Chromium stability
+    volumes:
+      # Mount config.json from host
+      - ./config.json:/app/config.json:ro
+      # Persist kiro-cli data
+      - kiro-data:/root/.local/share/kiro-cli
+      # Optional: mount for debugging
+      - ./last_identity.json:/app/last_identity.json
+    environment:
+      - DISPLAY=:99
+      - PYTHONUNBUFFERED=1
+    # Run in headless mode, register 3 accounts sequentially
+    command: ["python", "-u", "register.py", "--headless", "--count", "12"]
+    restart: "no"
+    # Resource limits (optional, adjust as needed)
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+volumes:
+  kiro-data:

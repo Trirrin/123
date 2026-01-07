@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+*.egg-info/
+
+# Config files with secrets
+config.json
+
+# Generated files
+identity_account_*.json
+last_identity.json
+*.log
+*.db
+*.sqlite3
+
+# Screenshots
+*.png
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.backup
+kiro-cli
