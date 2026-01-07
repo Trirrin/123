@@ -28,7 +28,7 @@ CONFIG_FILE = Path(__file__).parent / "config.json"
 KIRO_DB_PATH = Path.home() / ".local" / "share" / "kiro-cli" / "data.sqlite3"
 DEVICE_AUTH_URL = "https://view.awsapps.com/start/#/device"
 BUILDER_ID_URL = "https://profile.aws.amazon.com/"
-MAIL_TM_API_BASE = "https://api.mail.tm"
+ONESEC_MAIL_API = "https://www.1secmail.com/api/v1/"
 
 
 def retry_on_failure(max_attempts: int = 3, delay: float = 2.0, backoff: float = 2.0):
@@ -307,82 +307,60 @@ def load_config():
     return json.loads(CONFIG_FILE.read_text())
 
 
-class MailTMClient:
-    """Client for mail.tm temporary email service."""
+class OneSecMailClient:
+    """Client for 1secmail.com temporary email service (no auth required)."""
 
     def __init__(self):
-        self.base_url = MAIL_TM_API_BASE
-        self.session = requests.Session()
-        self.account_id = None
-        self.token = None
+        self.base_url = ONESEC_MAIL_API
         self.email_address = None
-        self.password = None
+        self.username = None
+        self.domain = None
 
     def get_available_domains(self) -> list:
         """Get list of available email domains."""
-        resp = self.session.get(f"{self.base_url}/domains")
+        resp = requests.get(f"{self.base_url}?action=getDomainList")
         resp.raise_for_status()
-        data = resp.json()
-        return [domain["domain"] for domain in data.get("hydra:member", [])]
+        return resp.json()
 
-    def create_account(self, address: str, password: str) -> dict:
-        """Create a new temporary email account."""
-        payload = {"address": address, "password": password}
-        resp = self.session.post(f"{self.base_url}/accounts", json=payload)
+    def generate_random_email(self) -> str:
+        """Generate a random email address."""
+        domains = self.get_available_domains()
+        if not domains:
+            raise RuntimeError("No available domains from 1secmail")
 
-        if resp.status_code == 422:
-            # Email already exists or invalid, try with random suffix
-            print(f"Email {address} failed (422), trying with random suffix...")
-            username, domain = address.split("@")
-            random_suffix = secrets.token_hex(4)
-            address = f"{username}{random_suffix}@{domain}"
-            payload = {"address": address, "password": password}
-            resp = self.session.post(f"{self.base_url}/accounts", json=payload)
+        # Generate random username (8-12 chars)
+        username_length = random.randint(8, 12)
+        username = ''.join(random.choices(string.ascii_lowercase + string.digits, k=username_length))
 
-        resp.raise_for_status()
-        account_data = resp.json()
-        self.account_id = account_data["id"]
-        self.email_address = address
-        self.password = password
-        print(f"Created temporary email: {address}")
-        return account_data
+        domain = random.choice(domains)
+        email = f"{username}@{domain}"
 
-    def get_token(self) -> str:
-        """Get authentication token with retry."""
-        max_attempts = 3
-        for attempt in range(1, max_attempts + 1):
-            try:
-                payload = {"address": self.email_address, "password": self.password}
-                resp = self.session.post(f"{self.base_url}/token", json=payload)
+        self.email_address = email
+        self.username = username
+        self.domain = domain
 
-                if resp.status_code == 401 and attempt < max_attempts:
-                    print(f"Token request failed (401), retrying in 2s... (attempt {attempt}/{max_attempts})")
-                    time.sleep(2)
-                    continue
-
-                resp.raise_for_status()
-                token_data = resp.json()
-                self.token = token_data["token"]
-                self.session.headers.update({"Authorization": f"Bearer {self.token}"})
-                return self.token
-            except Exception as e:
-                if attempt == max_attempts:
-                    raise
-                print(f"Token request error: {e}, retrying...")
-                time.sleep(2)
-
-        raise RuntimeError("Failed to get token after retries")
+        print(f"Generated temporary email: {email}")
+        return email
 
     def get_messages(self) -> list:
         """Get all messages in inbox."""
-        resp = self.session.get(f"{self.base_url}/messages")
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("hydra:member", [])
+        if not self.username or not self.domain:
+            raise RuntimeError("Email not initialized")
 
-    def get_message(self, message_id: str) -> dict:
+        resp = requests.get(
+            f"{self.base_url}?action=getMessages&login={self.username}&domain={self.domain}"
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_message(self, message_id: int) -> dict:
         """Get full message details."""
-        resp = self.session.get(f"{self.base_url}/messages/{message_id}")
+        if not self.username or not self.domain:
+            raise RuntimeError("Email not initialized")
+
+        resp = requests.get(
+            f"{self.base_url}?action=readMessage&login={self.username}&domain={self.domain}&id={message_id}"
+        )
         resp.raise_for_status()
         return resp.json()
 
@@ -398,13 +376,13 @@ class MailTMClient:
                 # Look for AWS verification email
                 for msg in messages:
                     subject = msg.get("subject", "").lower()
-                    from_addr = msg.get("from", {}).get("address", "").lower()
+                    from_addr = msg.get("from", "").lower()
 
                     # Check if it's from AWS
                     if "aws" in from_addr or "amazon" in from_addr or "signin.aws" in from_addr:
                         # Get full message content
                         full_msg = self.get_message(msg["id"])
-                        body = full_msg.get("text", "") or full_msg.get("html", "")
+                        body = full_msg.get("textBody", "") or full_msg.get("htmlBody", "")
 
                         # Extract 6-digit verification code
                         # Pattern 1: "Verification code: 123456"
@@ -432,87 +410,15 @@ class MailTMClient:
 
 
 def generate_identity() -> dict:
-    """Generate a random identity with realistic name and human-like email using mail.tm."""
+    """Generate a random identity with realistic name and email using 1secmail."""
     fake = Faker("en_US")
     first_name = fake.first_name()
     last_name = fake.last_name()
     full_name = f"{first_name} {last_name}"
 
-    # Create mail.tm client and get available domains
-    mail_client = MailTMClient()
-    domains = mail_client.get_available_domains()
-    if not domains:
-        raise RuntimeError("No available domains from mail.tm")
-
-    # Choose random domain
-    email_domain = random.choice(domains)
-
-    # Generate human-like email with multiple realistic patterns.
-    first_lower = first_name.lower()
-    last_lower = last_name.lower()
-    first_initial = first_lower[0]
-
-    # Choose email pattern randomly with weighted probabilities.
-    pattern = random.choices(
-        ["classic", "year", "initial_last", "last_initial", "short_number", "middle_initial"],
-        weights=[40, 20, 15, 10, 10, 5],
-        k=1
-    )[0]
-
-    if pattern == "classic":
-        # Classic full name: john.smith, johnsmith, john_smith
-        separator = random.choice([".", "_", ""])
-        email = f"{first_lower}{separator}{last_lower}@{email_domain}"
-
-    elif pattern == "year":
-        # Name + birth year: john1995, john.1992
-        year = random.randint(1985, 2002)  # Realistic age range
-        separator = random.choice(["", "."])
-        email = f"{first_lower}{separator}{year}@{email_domain}"
-
-    elif pattern == "initial_last":
-        # First initial + last name: jsmith, j.smith
-        separator = random.choice(["", "."])
-        email = f"{first_initial}{separator}{last_lower}@{email_domain}"
-
-    elif pattern == "last_initial":
-        # Last name + first initial: smithj, smith.j
-        separator = random.choice(["", "."])
-        email = f"{last_lower}{separator}{first_initial}@{email_domain}"
-
-    elif pattern == "short_number":
-        # Full name + short number (lucky number style): johnsmith23, john.smith7
-        separator = random.choice(["", ".", "_"])
-        number = random.randint(1, 99)  # Short, looks like lucky number
-        email = f"{first_lower}{separator}{last_lower}{number}@{email_domain}"
-
-    else:  # middle_initial
-        # Fake middle initial: john.m.smith, johnmsmith
-        middle_initial = random.choice(string.ascii_lowercase)
-        separator = random.choice([".", ""])
-        if separator:
-            email = f"{first_lower}{separator}{middle_initial}{separator}{last_lower}@{email_domain}"
-        else:
-            email = f"{first_lower}{middle_initial}{last_lower}@{email_domain}"
-
-    # Generate password for mail.tm account
-    mail_password = (
-        secrets.choice(string.ascii_uppercase)
-        + secrets.choice(string.ascii_lowercase)
-        + secrets.choice(string.digits)
-        + secrets.choice("!@#$%^&*")
-        + "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
-    )
-    mail_password = "".join(random.sample(mail_password, len(mail_password)))
-
-    # Create mail.tm account
-    mail_client.create_account(email, mail_password)
-
-    # Wait a bit for account to be fully created
-    time.sleep(1)
-
-    # Get authentication token
-    mail_client.get_token()
+    # Create 1secmail client and generate random email
+    mail_client = OneSecMailClient()
+    email = mail_client.generate_random_email()
 
     # Generate password for AWS Builder ID (meeting AWS requirements)
     aws_password = (
@@ -1148,7 +1054,7 @@ def main():
     # Load config.
     config = load_config()
     print(f"Backend URL: {config['backend_url']}")
-    print(f"Using mail.tm temporary email service")
+    print(f"Using 1secmail.com temporary email service")
 
     results = []
     for i in range(1, args.count + 1):
