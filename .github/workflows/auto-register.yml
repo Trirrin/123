@@ -58,7 +58,6 @@ jobs:
             fonts-noto-cjk
 
       - name: Install Python dependencies
-        working-directory: ./script
         run: |
           pip install --no-cache-dir -r requirements.txt
 
@@ -96,7 +95,6 @@ jobs:
           kiro-cli --version && echo "✅ kiro-cli installed successfully" || echo "⚠️ kiro-cli installation may have issues"
 
       - name: Create config.json
-        working-directory: ./script
         run: |
           cat > config.json << 'EOF'
           {
@@ -122,7 +120,6 @@ jobs:
           EOF
 
       - name: Run registration (Job ${{ matrix.job_id }})
-        working-directory: ./script
         env:
           DISPLAY: ':99'
           PYTHONUNBUFFERED: '1'
@@ -137,8 +134,8 @@ jobs:
         with:
           name: registration-logs-job-${{ matrix.job_id }}-${{ github.run_number }}
           path: |
-            script/identity_account_*.json
-            script/error_*.png
+            identity_account_*.json
+            error_*.png
           retention-days: 7
 
       - name: Report status
