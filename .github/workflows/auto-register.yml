@@ -123,6 +123,11 @@ jobs:
         env:
           DISPLAY: ':99'
           PYTHONUNBUFFERED: '1'
+          # Set proxy for kiro-cli and other tools
+          HTTP_PROXY: 'socks5://127.0.0.1:1080'
+          HTTPS_PROXY: 'socks5://127.0.0.1:1080'
+          http_proxy: 'socks5://127.0.0.1:1080'
+          https_proxy: 'socks5://127.0.0.1:1080'
         run: |
           echo "Starting registration job ${{ matrix.job_id }}"
           # Each job registers 6 accounts sequentially
