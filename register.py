@@ -852,12 +852,24 @@ def add_to_backend(config: dict, identity: dict, tokens: dict) -> bool:
     if admin_password:
         headers["Authorization"] = f"Bearer {admin_password}"
 
-    # Backend request does NOT use proxy (direct connection to your own server).
+    # 明确告诉 requests 不要使用代理
+    proxies = {
+        "http": None,
+        "https": None,
+        "all": None
+    }
+
     print(f"POST {url}")
     print(f"Name: {payload['name']}")
 
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=30)
+        resp = requests.post(
+            url, 
+            json=payload, 
+            headers=headers, 
+            timeout=30,
+            proxies=proxies  # 添加这一行
+        )
         if resp.status_code == 200:
             print(f"Account added successfully!")
             print(f"Response: {resp.json()}")
