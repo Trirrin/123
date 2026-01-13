@@ -852,11 +852,29 @@ def add_to_backend(config: dict, identity: dict, tokens: dict) -> bool:
     if admin_password:
         headers["Authorization"] = f"Bearer {admin_password}"
 
+    # Build proxies dict for requests library if proxy is enabled.
+    proxies = None
+    proxy_config = config.get("proxy", {})
+    if proxy_config.get("enabled"):
+        proxy_url = proxy_config["server"]
+        # Add authentication if provided.
+        if proxy_config.get("username") and proxy_config.get("password"):
+            # Parse proxy URL and inject credentials.
+            import urllib.parse
+            parsed = urllib.parse.urlparse(proxy_url)
+            proxy_url = f"{parsed.scheme}://{proxy_config['username']}:{proxy_config['password']}@{parsed.netloc}{parsed.path}"
+
+        proxies = {
+            "http": proxy_url,
+            "https": proxy_url,
+        }
+        print(f"Using proxy for backend request: {proxy_config['server']}")
+
     print(f"POST {url}")
     print(f"Name: {payload['name']}")
 
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=30)
+        resp = requests.post(url, json=payload, headers=headers, proxies=proxies, timeout=30)
         if resp.status_code == 200:
             print(f"Account added successfully!")
             print(f"Response: {resp.json()}")
@@ -900,6 +918,11 @@ def register_single_account(account_num: int, config: dict, headless: bool) -> d
     print(f"[Account {account_num}]   Viewport: {fingerprint['viewport']}")
     print(f"[Account {account_num}]   Locale: {fingerprint['locale']}")
 
+    # Check proxy configuration.
+    proxy_config = config.get("proxy", {})
+    if proxy_config.get("enabled"):
+        print(f"[Account {account_num}] Proxy enabled: {proxy_config['server']}")
+
     with sync_playwright() as p:
         # Launch browser with anti-detection args.
         browser = p.chromium.launch(
@@ -913,18 +936,30 @@ def register_single_account(account_num: int, config: dict, headless: bool) -> d
             ]
         )
 
-        # Create context with random fingerprint.
-        context = browser.new_context(
-            user_agent=fingerprint["user_agent"],
-            viewport=fingerprint["viewport"],
-            locale=fingerprint["locale"],
-            timezone_id=fingerprint["timezone"],
+        # Build context options with random fingerprint.
+        context_options = {
+            "user_agent": fingerprint["user_agent"],
+            "viewport": fingerprint["viewport"],
+            "locale": fingerprint["locale"],
+            "timezone_id": fingerprint["timezone"],
             # Additional realistic settings
-            color_scheme="light",
-            device_scale_factor=1,
-            has_touch=fingerprint["max_touch_points"] > 0,
-            is_mobile=False,
-        )
+            "color_scheme": "light",
+            "device_scale_factor": 1,
+            "has_touch": fingerprint["max_touch_points"] > 0,
+            "is_mobile": False,
+        }
+
+        # Add proxy configuration if enabled.
+        if proxy_config.get("enabled"):
+            proxy_settings = {"server": proxy_config["server"]}
+            if proxy_config.get("username"):
+                proxy_settings["username"] = proxy_config["username"]
+            if proxy_config.get("password"):
+                proxy_settings["password"] = proxy_config["password"]
+            context_options["proxy"] = proxy_settings
+
+        # Create context with fingerprint and optional proxy.
+        context = browser.new_context(**context_options)
 
         # Apply stealth scripts BEFORE creating page.
         stealth_scripts = get_stealth_init_scripts(fingerprint)

@@ -10,5 +10,11 @@
   },
   "email_domain": "tribios.top",
   "backend_url": "http://localhost:8000",
-  "admin_password": "your_admin_password"
+  "admin_password": "your_admin_password",
+  "proxy": {
+    "enabled": false,
+    "server": "socks5://127.0.0.1:1080",
+    "username": "",
+    "password": ""
+  }
 }
