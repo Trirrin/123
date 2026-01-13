@@ -852,29 +852,12 @@ def add_to_backend(config: dict, identity: dict, tokens: dict) -> bool:
     if admin_password:
         headers["Authorization"] = f"Bearer {admin_password}"
 
-    # Build proxies dict for requests library if proxy is enabled.
-    proxies = None
-    proxy_config = config.get("proxy", {})
-    if proxy_config.get("enabled"):
-        proxy_url = proxy_config["server"]
-        # Add authentication if provided.
-        if proxy_config.get("username") and proxy_config.get("password"):
-            # Parse proxy URL and inject credentials.
-            import urllib.parse
-            parsed = urllib.parse.urlparse(proxy_url)
-            proxy_url = f"{parsed.scheme}://{proxy_config['username']}:{proxy_config['password']}@{parsed.netloc}{parsed.path}"
-
-        proxies = {
-            "http": proxy_url,
-            "https": proxy_url,
-        }
-        print(f"Using proxy for backend request: {proxy_config['server']}")
-
+    # Backend request does NOT use proxy (direct connection to your own server).
     print(f"POST {url}")
     print(f"Name: {payload['name']}")
 
     try:
-        resp = requests.post(url, json=payload, headers=headers, proxies=proxies, timeout=30)
+        resp = requests.post(url, json=payload, headers=headers, timeout=30)
         if resp.status_code == 200:
             print(f"Account added successfully!")
             print(f"Response: {resp.json()}")
