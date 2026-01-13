@@ -160,9 +160,6 @@ jobs:
           # 设置代理环境变量（大写）
           HTTP_PROXY: 'socks5://127.0.0.1:1080'
           HTTPS_PROXY: 'socks5://127.0.0.1:1080'
-          # 同时设置小写版本以确保兼容性
-          http_proxy: 'socks5://127.0.0.1:1080'
-          https_proxy: 'socks5://127.0.0.1:1080'
         run: |
           echo "========================================"
           echo "🚀 Starting registration Job ${{ matrix.job_id }}"
