@@ -35,8 +35,7 @@ jobs:
             ca-certificates \
             fonts-liberation \
             fonts-noto-cjk \
-            jq \
-            docker.io
+            jq
 
       - name: Install Python dependencies
         run: |
