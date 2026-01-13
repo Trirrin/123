@@ -18,8 +18,6 @@ jobs:
   register-sequence:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    # 只有当 job_id 小于 total_jobs 时才运行
-    if: ${{ matrix.job_id < fromJSON(github.event.inputs.total_jobs || '5') }}
     strategy:
       # 串行执行，一次只运行一个 job
       max-parallel: 1
@@ -28,16 +26,31 @@ jobs:
         job_id: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 
     steps:
+      - name: Check if job should run
+        id: should_run
+        run: |
+          TOTAL_JOBS=${{ github.event.inputs.total_jobs || '5' }}
+          if [ ${{ matrix.job_id }} -lt $TOTAL_JOBS ]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+            echo "✅ Job ${{ matrix.job_id }} will run (total: $TOTAL_JOBS)"
+          else
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            echo "⏭️ Job ${{ matrix.job_id }} skipped (total: $TOTAL_JOBS)"
+          fi
+
       - name: Checkout repository
+        if: steps.should_run.outputs.should_run == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
+        if: steps.should_run.outputs.should_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
       - name: Install system dependencies
+        if: steps.should_run.outputs.should_run == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -52,21 +65,25 @@ jobs:
             docker.io
 
       - name: Install Python dependencies
+        if: steps.should_run.outputs.should_run == 'true'
         run: |
           pip install --no-cache-dir -r requirements.txt
 
       - name: Install Playwright browsers
+        if: steps.should_run.outputs.should_run == 'true'
         run: |
           playwright install chromium
           playwright install-deps chromium
 
       - name: Clean up any existing WARP containers
+        if: steps.should_run.outputs.should_run == 'true'
         run: |
           # 停止并删除可能存在的旧容器
           docker stop warproxy-${{ matrix.job_id }} || true
           docker rm warproxy-${{ matrix.job_id }} || true
 
       - name: Start fresh Cloudflare WARP Proxy
+        if: steps.should_run.outputs.should_run == 'true'
         run: |
           echo "🚀 Starting fresh Cloudflare WARP proxy for Job ${{ matrix.job_id }}..."
           
@@ -102,6 +119,7 @@ jobs:
           echo "$IP_INFO" | jq '. | {ip: .ip, city: .city, region: .region, country: .country, org: .org}' || echo "Could not parse IP info"
 
       - name: Install kiro-cli
+        if: steps.should_run.outputs.should_run == 'true'
         run: |
           echo "📦 Installing kiro-cli using official installer..."
           
@@ -128,6 +146,7 @@ jobs:
           fi
 
       - name: Create config.json
+        if: steps.should_run.outputs.should_run == 'true'
         run: |
           cat > config.json << 'EOF'
           {
@@ -155,6 +174,7 @@ jobs:
           echo "📁 Config.json created for Job ${{ matrix.job_id }}"
 
       - name: Run registration (Job ${{ matrix.job_id }})
+        if: steps.should_run.outputs.should_run == 'true'
         env:
           DISPLAY: ':99'
           PYTHONUNBUFFERED: '1'
@@ -182,7 +202,7 @@ jobs:
           echo "✅ Job ${{ matrix.job_id }} registration completed"
 
       - name: Clean up WARP container for this job
-        if: always()
+        if: always() && steps.should_run.outputs.should_run == 'true'
         run: |
           echo "🧹 Cleaning up WARP container for Job ${{ matrix.job_id }}..."
           docker stop warproxy-${{ matrix.job_id }} || true
@@ -190,7 +210,7 @@ jobs:
           echo "✅ WARP container cleaned up"
 
       - name: Upload registration logs
-        if: always()
+        if: always() && steps.should_run.outputs.should_run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: registration-logs-job-${{ matrix.job_id }}-${{ github.run_number }}
@@ -201,7 +221,7 @@ jobs:
           retention-days: 7
 
       - name: Job completion delay
-        if: success()
+        if: success() && steps.should_run.outputs.should_run == 'true'
         run: |
           echo "⏳ Waiting 10 seconds before next job..."
           sleep 10
