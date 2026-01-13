@@ -1,39 +1,30 @@
-name: Auto Register Kiro Accounts (Parallel)
+name: Auto Register Kiro Accounts (Sequential)
 
 on:
   workflow_dispatch:
     inputs:
-      parallel_jobs:
-        description: 'Number of parallel registration jobs'
+      accounts_per_job:
+        description: 'Number of accounts to register per job'
+        required: false
+        default: '6'
+        type: string
+      total_jobs:
+        description: 'Total number of sequential jobs to run'
         required: false
         default: '5'
         type: string
 
 jobs:
-  # Generate matrix dynamically based on input
-  setup:
+  register-sequence:
     runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-      - name: Set matrix
-        id: set-matrix
-        run: |
-          JOBS=${{ github.event.inputs.parallel_jobs || '5' }}
-          MATRIX=$(seq 1 $JOBS | jq -R . | jq -s -c .)
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-          echo "Will run $JOBS parallel jobs"
-
-  register:
-    needs: setup
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     strategy:
-      # Allow jobs to run in parallel without waiting for each other
-      fail-fast: false
-      max-parallel: 10  # GitHub allows up to 20 concurrent jobs for free tier
+      # 串行执行，一次只运行一个 job
+      max-parallel: 1
       matrix:
-        job_id: ${{ fromJson(needs.setup.outputs.matrix) }}
+        # 动态生成 job 序列
+        job_id: 
+          ${{ fromJSON(format('[0, {0}]', range(1, github.event.inputs.total_jobs))).map(n => n) }}
 
     steps:
       - name: Checkout repository
@@ -55,7 +46,9 @@ jobs:
             gnupg \
             ca-certificates \
             fonts-liberation \
-            fonts-noto-cjk
+            fonts-noto-cjk \
+            jq \
+            docker.io
 
       - name: Install Python dependencies
         run: |
@@ -66,33 +59,72 @@ jobs:
           playwright install chromium
           playwright install-deps chromium
 
-      - name: Start Cloudflare WARP Proxy
+      - name: Clean up any existing WARP containers
         run: |
-          echo "Starting Cloudflare WARP proxy..."
-          docker run -d --name warproxy -p 1080:1080 ghcr.io/kingcc/warproxy:latest
+          # 停止并删除可能存在的旧容器
+          docker stop warproxy || true
+          docker rm warproxy || true
 
-          echo "Waiting for WARP to initialize (30s)..."
-          sleep 30
+      - name: Start fresh Cloudflare WARP Proxy
+        run: |
+          echo "🚀 Starting fresh Cloudflare WARP proxy for Job ${{ matrix.job_id }}..."
+          
+          # 拉取最新镜像
+          docker pull ghcr.io/kingcc/warproxy:latest
+          
+          # 启动新的 WARP 代理容器
+          docker run -d --name warproxy-${{ matrix.job_id }} -p 1080:1080 ghcr.io/kingcc/warproxy:latest
 
-          # Verify proxy is working
-          echo "Testing proxy connection..."
-          curl --socks5 127.0.0.1:1080 https://cloudflare.com/cdn-cgi/trace || echo "⚠️ Proxy not ready yet, waiting 10s more..."
-          sleep 10
-          curl --socks5 127.0.0.1:1080 https://cloudflare.com/cdn-cgi/trace && echo "✅ WARP proxy is working" || echo "❌ WARP proxy failed"
+          echo "⏳ Waiting for WARP to initialize (35s)..."
+          sleep 35
+
+          # 验证代理是否工作
+          echo "🔍 Testing proxy connection..."
+          for i in {1..10}; do
+            if curl --socks5 127.0.0.1:1080 https://cloudflare.com/cdn-cgi/trace --connect-timeout 30 --max-time 45 --silent 2>/dev/null; then
+              echo "✅ WARP proxy is working (attempt $i)"
+              break
+            else
+              echo "⚠️ Proxy not ready yet, waiting 5s more... (attempt $i)"
+              sleep 5
+            fi
+            if [ $i -eq 10 ]; then
+              echo "❌ WARP proxy failed to start after 10 attempts"
+              exit 1
+            fi
+          done
+
+          # 获取当前 WARP IP
+          echo "🌐 Getting current WARP IP address..."
+          IP_INFO=$(curl --socks5 127.0.0.1:1080 https://ipinfo.io/json --connect-timeout 30 2>/dev/null || echo "{}")
+          echo "Current Proxy IP Info:"
+          echo "$IP_INFO" | jq '. | {ip: .ip, city: .city, region: .region, country: .country, org: .org}' || echo "Could not parse IP info"
 
       - name: Install kiro-cli
         run: |
-          echo "Installing kiro-cli using official installer..."
+          echo "📦 Installing kiro-cli using official installer..."
+          
+          # 确保目录存在
+          mkdir -p ~/.local/bin
+          
+          # 下载并安装
           curl -fsSL https://cli.kiro.dev/install | bash
 
-          # Add to PATH for current session
-          export PATH="$HOME/.local/bin:$PATH"
-
-          # Add to PATH for subsequent steps
+          # 添加到 PATH
           echo "$HOME/.local/bin" >> $GITHUB_PATH
-
-          # Verify installation
-          kiro-cli --version && echo "✅ kiro-cli installed successfully" || echo "⚠️ kiro-cli installation may have issues"
+          
+          # 等待一下确保路径生效
+          sleep 2
+          
+          # 验证安装
+          if ~/.local/bin/kiro-cli --version 2>/dev/null; then
+            echo "✅ kiro-cli installed successfully"
+          else
+            # 尝试直接运行
+            echo "Trying alternative installation check..."
+            export PATH="$HOME/.local/bin:$PATH"
+            kiro-cli --version && echo "✅ kiro-cli verified" || echo "⚠️ kiro-cli may have issues"
+          fi
 
       - name: Create config.json
         run: |
@@ -118,18 +150,46 @@ jobs:
             }
           }
           EOF
+          
+          echo "📁 Config.json created for Job ${{ matrix.job_id }}"
 
       - name: Run registration (Job ${{ matrix.job_id }})
         env:
           DISPLAY: ':99'
           PYTHONUNBUFFERED: '1'
-          # Set proxy for kiro-cli and other tools - 只使用大写版本
+          # 设置代理环境变量（大写）
           HTTP_PROXY: 'socks5://127.0.0.1:1080'
           HTTPS_PROXY: 'socks5://127.0.0.1:1080'
+          # 同时设置小写版本以确保兼容性
+          http_proxy: 'socks5://127.0.0.1:1080'
+          https_proxy: 'socks5://127.0.0.1:1080'
         run: |
-          echo "Starting registration job ${{ matrix.job_id }}"
-          # Each job registers 6 accounts sequentially
-          python -u register.py --headless --count 6
+          echo "========================================"
+          echo "🚀 Starting registration Job ${{ matrix.job_id }}"
+          echo "========================================"
+          
+          # 显示当前环境信息
+          echo "🌐 Proxy settings:"
+          echo "HTTP_PROXY: $HTTP_PROXY"
+          echo "HTTPS_PROXY: $HTTPS_PROXY"
+          
+          # 验证代理连接
+          echo "🔍 Verifying proxy connectivity..."
+          curl --socks5 127.0.0.1:1080 https://httpbin.org/ip --connect-timeout 30 && echo "✅ Proxy verified" || echo "⚠️ Proxy verification failed"
+          
+          # 运行注册脚本
+          echo "📝 Registering ${{ github.event.inputs.accounts_per_job || '6' }} accounts..."
+          python -u register.py --headless --count ${{ github.event.inputs.accounts_per_job || '6' }}
+          
+          echo "✅ Job ${{ matrix.job_id }} registration completed"
+
+      - name: Clean up WARP container for this job
+        if: always()
+        run: |
+          echo "🧹 Cleaning up WARP container for Job ${{ matrix.job_id }}..."
+          docker stop warproxy-${{ matrix.job_id }} || true
+          docker rm warproxy-${{ matrix.job_id }} || true
+          echo "✅ WARP container cleaned up"
 
       - name: Upload registration logs
         if: always()
@@ -139,28 +199,32 @@ jobs:
           path: |
             identity_account_*.json
             error_*.png
+            *.log
           retention-days: 7
 
-      - name: Report status
-        if: always()
+      - name: Job completion delay
+        if: success()
         run: |
-          if [ $? -eq 0 ]; then
-            echo "✅ Job ${{ matrix.job_id }} completed successfully"
-          else
-            echo "❌ Job ${{ matrix.job_id }} failed"
-          fi
+          echo "⏳ Waiting 10 seconds before next job..."
+          sleep 10
 
   summary:
-    needs: register
+    needs: register-sequence
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Generate summary
         run: |
-          echo "## Registration Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Registration Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- Total parallel jobs: ${{ github.event.inputs.parallel_jobs || '5' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Run number: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Triggered by: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "### Job Details:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total sequential jobs:** ${{ github.event.inputs.total_jobs || '5' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Accounts per job:** ${{ github.event.inputs.accounts_per_job || '6' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Potential total accounts:** ${{ (github.event.inputs.total_jobs || 5) * (github.event.inputs.accounts_per_job || 6) }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run number:** ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Check individual job logs for detailed results." >> $GITHUB_STEP_SUMMARY
+          echo "### Execution Status:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow status:** ${{ needs.register-sequence.result || 'unknown' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📁 Check artifact logs for detailed registration results from each job." >> $GITHUB_STEP_SUMMARY
