@@ -18,13 +18,14 @@ jobs:
   register-sequence:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # 只有当 job_id 小于 total_jobs 时才运行
+    if: ${{ matrix.job_id < fromJSON(github.event.inputs.total_jobs || '5') }}
     strategy:
       # 串行执行，一次只运行一个 job
       max-parallel: 1
       matrix:
-        # 动态生成 job 序列
-        job_id: 
-          ${{ fromJSON(format('[0, {0}]', range(1, github.event.inputs.total_jobs))).map(n => n) }}
+        # 静态定义 job 序列，支持最多 20 个 job
+        job_id: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 
     steps:
       - name: Checkout repository
@@ -62,8 +63,8 @@ jobs:
       - name: Clean up any existing WARP containers
         run: |
           # 停止并删除可能存在的旧容器
-          docker stop warproxy || true
-          docker rm warproxy || true
+          docker stop warproxy-${{ matrix.job_id }} || true
+          docker rm warproxy-${{ matrix.job_id }} || true
 
       - name: Start fresh Cloudflare WARP Proxy
         run: |
@@ -217,7 +218,7 @@ jobs:
           echo "### Job Details:" >> $GITHUB_STEP_SUMMARY
           echo "- **Total sequential jobs:** ${{ github.event.inputs.total_jobs || '5' }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Accounts per job:** ${{ github.event.inputs.accounts_per_job || '6' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Potential total accounts:** ${{ (github.event.inputs.total_jobs || 5) * (github.event.inputs.accounts_per_job || 6) }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Potential total accounts:** $(( (${{ github.event.inputs.total_jobs || '5' }}) * (${{ github.event.inputs.accounts_per_job || '6' }}) ))" >> $GITHUB_STEP_SUMMARY
           echo "- **Run number:** ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
