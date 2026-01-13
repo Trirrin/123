@@ -1,9 +1,6 @@
 name: Auto Register Kiro Accounts (Parallel)
 
 on:
-  schedule:
-    # Run every 6 hours (adjust as needed)
-    - cron: '0 */6 * * *'
   workflow_dispatch:
     inputs:
       parallel_jobs:
